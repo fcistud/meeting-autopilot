@@ -547,9 +547,15 @@ def api_health():
 def api_transcribe():
     payload = request.get_json(silent=True) or {}
     audio_b64 = payload.get("audio_wav_base64")
+    prompt_tail = payload.get("prompt", "")
 
     if not isinstance(audio_b64, str) or not audio_b64.strip():
         return jsonify({"ok": False, "error": "Missing 'audio_wav_base64'."}), 400
+    if not isinstance(prompt_tail, str):
+        prompt_tail = ""
+    prompt_tail = " ".join(prompt_tail.split()).strip()
+    if len(prompt_tail) > 360:
+        prompt_tail = prompt_tail[-360:]
 
     try:
         audio_bytes = base64.b64decode(audio_b64, validate=True)
@@ -573,7 +579,8 @@ def api_transcribe():
             ), 500
 
         start = time.time()
-        raw = cactus_transcribe(model, str(audio_path), prompt=WHISPER_PROMPT)
+        prompt = WHISPER_PROMPT if not prompt_tail else f"{WHISPER_PROMPT} {prompt_tail}"
+        raw = cactus_transcribe(model, str(audio_path), prompt=prompt)
         elapsed_ms = (time.time() - start) * 1000
 
         data = json.loads(raw)

@@ -9,7 +9,10 @@ const state = {
     processorNode: null,
     muteNode: null,
     sampleRate: 16000,
+    targetSampleRate: 16000,
     buffers: [],
+    tailSamples: new Float32Array(0),
+    transcriptContext: "",
     flushTimer: null,
     pending: Promise.resolve(),
   },
@@ -245,6 +248,92 @@ function mergeBuffers(buffers) {
   return output;
 }
 
+function concatFloat32(a, b) {
+  const output = new Float32Array(a.length + b.length);
+  output.set(a, 0);
+  output.set(b, a.length);
+  return output;
+}
+
+function downsampleBuffer(samples, inputRate, outputRate) {
+  if (!samples || !samples.length) {
+    return new Float32Array(0);
+  }
+  if (!inputRate || inputRate <= 0 || inputRate === outputRate) {
+    return samples;
+  }
+  if (outputRate > inputRate) {
+    return samples;
+  }
+
+  const ratio = inputRate / outputRate;
+  const newLength = Math.max(1, Math.round(samples.length / ratio));
+  const result = new Float32Array(newLength);
+  let offsetResult = 0;
+  let offsetInput = 0;
+
+  while (offsetResult < newLength) {
+    const nextOffsetInput = Math.min(samples.length, Math.round((offsetResult + 1) * ratio));
+    let accum = 0;
+    let count = 0;
+    for (let i = offsetInput; i < nextOffsetInput; i += 1) {
+      accum += samples[i];
+      count += 1;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult += 1;
+    offsetInput = nextOffsetInput;
+  }
+  return result;
+}
+
+function computeRms(samples) {
+  if (!samples || !samples.length) {
+    return 0;
+  }
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const v = samples[i];
+    sum += v * v;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
+function buildPromptContext(text, maxWords = 48) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return "";
+  }
+  return words.slice(-maxWords).join(" ");
+}
+
+function stitchTranscript(existingText, incomingText) {
+  const existing = String(existingText || "").trim();
+  const incoming = String(incomingText || "").trim();
+  if (!incoming) {
+    return existing;
+  }
+  if (!existing) {
+    return incoming;
+  }
+
+  const existingWords = existing.split(/\s+/);
+  const incomingWords = incoming.split(/\s+/);
+  const maxOverlap = Math.min(10, existingWords.length, incomingWords.length);
+  let overlap = 0;
+
+  for (let k = maxOverlap; k >= 1; k -= 1) {
+    const tail = existingWords.slice(existingWords.length - k).join(" ").toLowerCase();
+    const head = incomingWords.slice(0, k).join(" ").toLowerCase();
+    if (tail === head) {
+      overlap = k;
+      break;
+    }
+  }
+
+  return `${existing} ${incomingWords.slice(overlap).join(" ")}`.trim().replace(/\s+/g, " ");
+}
+
 function writeString(view, offset, text) {
   for (let i = 0; i < text.length; i += 1) {
     view.setUint8(offset + i, text.charCodeAt(i));
@@ -297,18 +386,21 @@ function blobToBase64(blob) {
   });
 }
 
-async function sendAudioChunk(samples, sampleRate) {
+async function sendAudioChunk(samples, sampleRate, promptContext = "") {
   const wavBlob = encodeWav(samples, sampleRate);
   const audioBase64 = await blobToBase64(wavBlob);
 
   const data = await postJSON("/api/transcribe", {
     session_id: state.sessionId,
     audio_wav_base64: audioBase64,
+    prompt: promptContext,
   });
 
   const text = (data.transcript || "").trim();
   if (text) {
-    ui.transcriptInput.value = `${ui.transcriptInput.value.trim()} ${text}`.trim();
+    const stitched = stitchTranscript(ui.transcriptInput.value, text);
+    ui.transcriptInput.value = stitched;
+    state.recording.transcriptContext = buildPromptContext(stitched, 48);
     addLog(`Transcribed chunk (${data.engine_time_ms}ms): "${text}"`);
   }
 }
@@ -321,13 +413,32 @@ async function flushAudioBuffers(force = false) {
   state.recording.buffers = [];
 
   const merged = mergeBuffers(buffers);
-  if (!force && merged.length < 1200) {
+  const inputRate = state.recording.sampleRate || 16000;
+  const targetRate = state.recording.targetSampleRate || 16000;
+  const downsampled = downsampleBuffer(merged, inputRate, targetRate);
+
+  // Keep chunks long enough to improve Whisper quality.
+  if (!force && downsampled.length < Math.floor(targetRate * 2.2)) {
     return;
   }
 
-  const sampleRate = state.recording.sampleRate || 16000;
+  const rms = computeRms(downsampled);
+  if (!force && rms < 0.003) {
+    return;
+  }
+
+  let chunkToSend = downsampled;
+  if (state.recording.tailSamples && state.recording.tailSamples.length) {
+    chunkToSend = concatFloat32(state.recording.tailSamples, downsampled);
+  }
+
+  // Add a small overlap so words at chunk boundaries are preserved.
+  const overlapSamples = Math.min(Math.floor(targetRate * 0.35), downsampled.length);
+  state.recording.tailSamples = downsampled.slice(downsampled.length - overlapSamples);
+  const promptContext = state.recording.transcriptContext || "";
+
   state.recording.pending = state.recording.pending
-    .then(() => sendAudioChunk(merged, sampleRate))
+    .then(() => sendAudioChunk(chunkToSend, targetRate, promptContext))
     .catch((err) => {
       addLog(`Transcription chunk failed: ${err.message}`);
     });
@@ -340,12 +451,20 @@ async function startLiveCapture() {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
       video: false,
     });
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const audioContext = new AudioCtx();
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
     const sourceNode = audioContext.createMediaStreamSource(stream);
     const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
     const muteNode = audioContext.createGain();
@@ -372,10 +491,13 @@ async function startLiveCapture() {
     state.recording.processorNode = processorNode;
     state.recording.muteNode = muteNode;
     state.recording.sampleRate = audioContext.sampleRate;
+    state.recording.targetSampleRate = 16000;
     state.recording.buffers = [];
+    state.recording.tailSamples = new Float32Array(0);
+    state.recording.transcriptContext = buildPromptContext(ui.transcriptInput.value, 48);
     state.recording.flushTimer = setInterval(() => {
       flushAudioBuffers(false);
-    }, 3500);
+    }, 5000);
 
     ui.liveToggleBtn.textContent = "Stop Live Capture";
     setTranscribeState("live", "live");
@@ -422,6 +544,7 @@ async function stopLiveCapture() {
   state.recording.processorNode = null;
   state.recording.muteNode = null;
   state.recording.buffers = [];
+  state.recording.tailSamples = new Float32Array(0);
   state.recording.pending = Promise.resolve();
 
   ui.liveToggleBtn.textContent = "Start Live Capture";
@@ -462,6 +585,7 @@ function init() {
   ui.liveToggleBtn.addEventListener("click", toggleLiveCapture);
   ui.clearTranscriptBtn.addEventListener("click", () => {
     ui.transcriptInput.value = "";
+    state.recording.transcriptContext = "";
     addLog("Transcript cleared.");
   });
 
