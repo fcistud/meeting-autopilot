@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meeting-to-Execution Autopilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="scene-glow scene-glow-a"></div>
+  <div class="scene-glow scene-glow-b"></div>
+
+  <header class="hero fade-up">
+    <p class="eyebrow">FunctionGemma x Cactus</p>
+    <h1>Meeting-to-Execution Autopilot</h1>
+    <p class="subtitle">
+      Live voice capture with <code>cactus_transcribe</code>, hybrid routing preview, and one-click execution.
+    </p>
+  </header>
+
+  <main class="layout">
+    <section class="panel fade-up delay-1">
+      <div class="panel-head">
+        <h2>Live Transcript</h2>
+        <span id="transcribeStatus" class="pill neutral">idle</span>
+      </div>
+
+      <div class="control-row">
+        <button id="liveToggleBtn" class="btn accent">Start Live Capture</button>
+        <button id="clearTranscriptBtn" class="btn ghost">Clear</button>
+      </div>
+
+      <textarea id="transcriptInput" placeholder="Live transcript appears here..."></textarea>
+
+      <div class="config-grid">
+        <label class="config-card">
+          <span>Confidence Threshold</span>
+          <input id="thresholdInput" type="range" min="0" max="1" step="0.01" value="0.55">
+          <strong id="thresholdValue">0.55</strong>
+        </label>
+
+        <label class="config-card switch-card">
+          <span>Allow Cloud Escalation</span>
+          <input id="allowCloudInput" type="checkbox" checked>
+        </label>
+      </div>
+
+      <details class="judge-box">
+        <summary>Judge Mode: Optional expected tool calls (for exact F1)</summary>
+        <textarea id="expectedCallsInput" placeholder='[{"name":"send_message","arguments":{"recipient":"Alice","message":"done"}}]'></textarea>
+      </details>
+
+      <div class="control-row">
+        <button id="planBtn" class="btn primary">Generate Plan Preview</button>
+        <button id="executeBtn" class="btn success" disabled>Execute Previewed Plan</button>
+      </div>
+    </section>
+
+    <section class="panel fade-up delay-2">
+      <div class="panel-head">
+        <h2>Plan Preview</h2>
+        <span id="sourceBadge" class="pill neutral">no plan</span>
+      </div>
+      <p id="routeReason" class="route-reason">Awaiting transcript.</p>
+      <div id="planList" class="stack"></div>
+      <h3>Execution Log</h3>
+      <div id="executionLog" class="log"></div>
+    </section>
+
+    <section class="panel fade-up delay-3">
+      <div class="panel-head">
+        <h2>Routing & Metrics</h2>
+        <span id="sessionBadge" class="pill neutral">session pending</span>
+      </div>
+
+      <div id="fallbackViz" class="stack"></div>
+
+      <div class="metrics-grid">
+        <article class="metric-card">
+          <p>Current Latency</p>
+          <strong id="latencyCurrent">-- ms</strong>
+        </article>
+        <article class="metric-card">
+          <p>Avg Latency</p>
+          <strong id="latencyAvg">-- ms</strong>
+        </article>
+        <article class="metric-card">
+          <p>On-Device Ratio</p>
+          <strong id="onDeviceRatio">--%</strong>
+        </article>
+        <article class="metric-card">
+          <p>F1-Style Correctness</p>
+          <strong id="f1StyleAvg">--</strong>
+        </article>
+        <article class="metric-card">
+          <p>Exact F1 (if provided)</p>
+          <strong id="exactF1Avg">--</strong>
+        </article>
+        <article class="metric-card">
+          <p>Turns</p>
+          <strong id="turnCount">0</strong>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
