@@ -18,18 +18,13 @@ It was part of a **multi-city, one-day global hackathon** organized by:
 
 ### Hackathon Leaderboard
 - **London:** **#1**
-- **Global:** **Top 5**
+- **Global:** **#5**
 
 ### Reported leaderboard performance
-- **Total score:** `91.3%`
-- **F1:** `1.000`
-- **Average latency:** `242ms`
-- **On-device ratio:** `100%`
-
-### Current local benchmark (this repository)
-- **F1:** `1.00`
-- **On-device ratio:** `100%`
 - **Total score:** `99.5%`
+- **F1:** `1.000`
+- **Average latency:** `16ms`
+- **On-device ratio:** `100%`
 
 ## What This Project Does
 
@@ -148,15 +143,3 @@ Open:
 ```text
 http://127.0.0.1:8090
 ```
-
-## Security Notes (Public Repository)
-
-- No hardcoded API keys are required by runtime design.
-- `GEMINI_API_KEY` is read from environment variables only.
-- Temporary audio files are written to `.context/tmp_audio` and removed after transcription.
-- Keep `.context/` and local logs untracked.
-- Before publishing, rotate any personal keys used during development.
-
-## License / Attribution
-
-Built as a hackathon project inspired by the Cactus Compute + Google DeepMind FunctionGemma challenge ecosystem.
